@@ -4,3 +4,6 @@
 *.o
 *.a
 test/reformat
+test/type_of
+*.t.rej
+*.t.orig
