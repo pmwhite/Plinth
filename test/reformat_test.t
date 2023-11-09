@@ -367,6 +367,18 @@ A big nested call expression, with a multiline expression on the inside.
                   let a = a
                   a))))))))
 
+A call expression can itself be called.
+
+  $ test "a(b)(c)(d)()"
+  a(b)(c)(d)()
+
+  $ test "a(let x = 0 x)(let x = 0 x)"
+  a(
+    let x = 0
+    x)(
+    let x = 0
+    x)
+
 BITS TYPE
 
 The bits type is a sequence of digits. Unlike integer literals, no signs are

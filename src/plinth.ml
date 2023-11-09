@@ -32,7 +32,7 @@ type expr =
       ; body : expr
       }
   | Call of
-      { fn : string
+      { fn : expr
       ; args : expr list
       }
 
@@ -312,16 +312,21 @@ let rec parse_expr (ps : parse_state) : expr =
          let body = parse_expr ps in
          Fn { arg_names; body }
        | _ ->
-         parse_whitespace ps;
-         if ps.index < ps.input_len && Char.equal ps.input.[ps.index] '('
-         then (
-           ps.index <- ps.index + 1;
-           parse_whitespace ps;
-           let args = parse_args ps ~f:parse_expr in
-           Call { fn = symbol; args })
-         else Identifier symbol)
+         let expr = Identifier symbol in
+         parse_and_attach_post_expr_operations ps expr)
     | _ -> user_error "Parse error: expected expression.")
   else user_error "Parse error: expected expression."
+
+and parse_and_attach_post_expr_operations (ps : parse_state) (expr : expr) : expr =
+  parse_whitespace ps;
+  if ps.index < ps.input_len && Char.equal ps.input.[ps.index] '('
+  then (
+    ps.index <- ps.index + 1;
+    parse_whitespace ps;
+    let args = parse_args ps ~f:parse_expr in
+    let expr = Call { fn = expr; args } in
+    parse_and_attach_post_expr_operations ps expr)
+  else expr
 
 and parse_cases (ps : parse_state) : (string * expr) list =
   if ps.index < ps.input_len && Char.equal ps.input.[ps.index] '}'
@@ -504,7 +509,7 @@ let rec output_expr (output : output) (expr : expr) : unit =
       output_string output " ";
       output_expr output body)
   | Call { fn; args } ->
-    output_string output fn;
+    output_expr output fn;
     output_string output "(";
     if is_multiline_expr expr
     then (
@@ -725,7 +730,7 @@ let rec infer_type (env : env) (expr : expr) (incoming : type_) : type_ =
         let incoming =
           Function { return = incoming; args = ListLabels.map args ~f:(fun _ -> Unknown) }
         in
-        env_find_and_infer env fn incoming
+        infer_type env fn incoming
       in
       args_and_return_of_function_type fn_type
     in
