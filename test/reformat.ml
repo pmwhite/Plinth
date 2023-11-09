@@ -9,3 +9,4 @@ let () =
        if String.equal s roundtripped
        then print_endline s
        else Printf.eprintf "The printer and parser did not roundtrip")
+;;
