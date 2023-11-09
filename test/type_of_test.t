@@ -138,3 +138,76 @@ too difficult of a leap.
   > result
   > EOF
   1
+
+MATCH EXPRESSIONS
+
+Match expressions do not have a mechanism type annotation, so type information
+must flow from the outside. The expression being matched must be some bits type
+(that is, its type has to be a number, rather than a pointer or function type)
+
+Information can flow from the outside of the expression.
+
+  $ test_file <<EOF
+  > let x : 1 = 1
+  > let result : 1 =
+  >   match x {
+  >     0 -> 1
+  >   }
+  > result
+  > EOF
+  1
+
+Or it can come from inside the expression.
+
+  $ test_file <<EOF
+  > let f = fn(a) a
+  > let x : 1 = 1
+  > let result : 1 =
+  >   match f(x) {
+  >     0 -> f(x)
+  >   }
+  > result
+  > EOF
+  1
+
+REC EXPRESSIONS
+
+Rec expressions type-check similarly to let expressions, but care has to be
+taken such that the lazy analysis of expressions does not lead to an infinite
+loop. That is, in the following expression,
+
+  $ test_file <<EOF
+  > rec x = y
+  > & y = x
+  > let a : 10 = x
+  > a
+  > EOF
+  10
+
+the analysis begins at "a"'s type annotation and flows backward into "x" and
+then into "y". The compiler is careful to not flow from "y" into "x" again,
+since "x" has already been visited.
+
+Rec expressions can get information both from outside and from inside their
+expression.
+
+  $ test_file <<EOF
+  > rec x = y
+  > & y : 4 = x
+  > x
+  > EOF
+  4
+
+  $ test_file <<EOF
+  > rec x : fn(11) 11 = fn(a : 11) y(a)
+  > & y = fn(b : 11) x(b)
+  > y(11)
+  > EOF
+  11
+
+  $ test_file <<EOF
+  > rec x = fn(a : 11) y(a)
+  > & y : fn(11) 11 = fn(b : 11) x(b)
+  > y(11)
+  > EOF
+  11
