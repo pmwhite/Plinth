@@ -1,9 +1,0 @@
-rule cmi
-  command = ocamlopt $in -o $out
-
-rule cmxa
-  command = ocamlopt $in -a -cmi-file 
-
-build src/plinth.cmi: cmi src/plinth.ml
-build src/plinth.cmxa: cmi src/plinth.ml
-  cmi = src/plinth.cmi

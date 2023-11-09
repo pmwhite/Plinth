@@ -1,4 +1,0 @@
-(library
- (name lang2)
- (libraries)
- (preprocess (pps ppx_jane)))
