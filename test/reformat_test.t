@@ -366,3 +366,69 @@ A big nested call expression, with a multiline expression on the inside.
                 i(
                   let a = a
                   a))))))))
+
+BITS TYPE
+
+The bits type is a sequence of digits. Unlike integer literals, no signs are
+allowed.
+
+  $ test "let x : 0 = 0 x"
+  let x : 0 = 0
+  x
+
+POINTER TYPE
+
+The "ptr" type contains an inner type, which may itself be another ptr type.
+
+  $ test "let x : ptr(0) = 0 x"
+  let x : ptr(0) = 0
+  x
+
+  $ test "let x : ptr(ptr(ptr(ptr(ptr(0))))) = 0 x"
+  let x : ptr(ptr(ptr(ptr(ptr(0))))) = 0
+  x
+
+FUNCTION TYPE
+
+A function type has a bunch of argument types and a return type.
+
+  $ test "let x : fn(0, 1,2 , 3)0 = 0 x"
+  let x : fn(0, 1, 2, 3) 0 = 0
+  x
+
+  $ test "let x : fn( fn(fn (fn(fn(0)0)0 ) 0) 0 )0 = 0 x"
+  let x : fn(fn(fn(fn(fn(0) 0) 0) 0) 0) 0 = 0
+  x
+
+  $ test "let x : fn() fn() fn () fn () 0 = 0 x"
+  let x : fn() fn() fn() fn() 0 = 0
+  x
+
+  $ test "let x : fn(fn() fn () 0, fn (0) 0) fn () 0 = 0 x"
+  let x : fn(fn() fn() 0, fn(0) 0) fn() 0 = 0
+  x
+
+TYPE ANNOTATIONS
+
+Type annotations get placed anywhere a name is introduced. This includes...
+
+Let expressions.
+
+  $ test "let a : 1 = 1 a"
+  let a : 1 = 1
+  a
+
+Rec expressions.
+
+  $ test "rec a : 1 = 1 & b : 1 = 1 a"
+  rec a : 1 = 1
+  & b : 1 = 1
+  a
+
+Function expressions.
+
+  $ test "fn(a : 0, b: 1, c:fn(0)0) 0"
+  fn(a : 0, b : 1, c : fn(0) 0) 0
+
+  $ test "fn() fn(x:fn()fn()0) 0"
+  fn() fn(x : fn() fn() 0) 0
