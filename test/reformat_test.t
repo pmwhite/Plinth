@@ -5,6 +5,10 @@ yields the same text as formatting it only once; this ensures a couple propertie
 1. The parser and formatter roundtrip.
 2. The formatter is stable.
 
+This file specifies the Plinth syntax, but it does not specify the set of legal
+Plinth programs. One useful difference between the two sets is that one can
+reformat source code even if it contains, for example, type errors.
+
 To keep each test succinct, we make some helper functions.
 
   $ test() { echo $1 | $TEST_DIR/reformat; }
@@ -185,3 +189,180 @@ Nesting and type annotation can happen anywhere in the rec expression.
     i
   & x : 10 = 10
   j
+
+MATCH EXPRESSIONS
+
+Match expressions enable conditional control flow. They consist of an
+expression to be inspected and a list of cases. Each case is a pair of an
+integer and an expression to be run if that matched value equals the integer.
+
+  $ test "match x { 1 -> y 2 -> z }"
+  match x {
+    1 -> y
+    2 -> z
+  }
+
+A match expression is allowed to not have any cases.
+
+  $ test "match a {}"
+  match a {}
+
+The matched expression can be anything.
+
+  $ test "match let x = y z { 1 -> x }"
+  match
+    let x = y
+    z
+  {
+    1 -> x
+  }
+
+The body of each case can be a let expression.
+
+  $ test "match x { 1 -> let x = y z }"
+  match x {
+    1 ->
+      let x = y
+      z
+  }
+
+The body of a match expression can be another match expression.
+
+  $ test_file <<EOF
+  > match a
+  > { 1 ->
+  >   match b {  2 -> c }
+  > 3 -> d }
+  > EOF
+  match a {
+    1 ->
+      match b {
+        2 -> c
+      }
+    3 -> d
+  }
+
+The expression being matched can be another match expression. It is not
+formatted on its own lines unless it is itself a multiline expression.
+
+  $ test "match match match a {} {} {}"
+  match match match a {} {} {}
+
+  $ test "match match match a { 0 -> 1 } {} {}"
+  match
+    match
+      match a {
+        0 -> 1
+      }
+    {}
+  {}
+
+  $ test "match match match a {} {} { 0 -> 1 }"
+  match match match a {} {} {
+    0 -> 1
+  }
+
+FUNCTIONS
+
+Functions accept a bunch of argument identifiers and return a result
+expression.
+
+  $ test "fn(a,b,c)a"
+  fn(a, b, c) a
+
+  $ test "fn(a ) x"
+  fn(a) x
+
+If the body of a function is single line, then the whole expression is
+a single line.
+
+  $ test "fn ( a, b , c) match x { }"
+  fn(a, b, c) match x {}
+
+Functions can have no arguments.
+
+  $ test "fn () c"
+  fn() c
+
+Functions can return other functions.
+
+  $ test "fn() fn() fn() c"
+  fn() fn() fn() c
+
+Using multiline expressions inside a function body makes it multiline.
+
+  $ test "fn() let a = fn() x fn() c"
+  fn()
+    let a = fn() x
+    fn() c
+
+  $ test "fn() match x { 1 -> 2 }"
+  fn()
+    match x {
+      1 -> 2
+    }
+
+CALLS
+
+Identifiers can be called with argument expressions. It is expected, of course,
+that the identifier is bound to a function.
+
+  $ test "f(a, b, c)"
+  f(a, b, c)
+
+Function calls can be nested.
+
+  $ test "x(g(a,b,c), d, e(f, g, h))"
+  x(g(a, b, c), d, e(f, g, h))
+
+Arguments can be arbitrary expressions. If they are multiline expressions, then
+the whole call gets made multiline.
+
+  $ test "function(let a = junction(let a = a a, gumption(a, b, c)) a)"
+  function(
+    let a =
+      junction(
+        let a = a
+        a,
+        gumption(a, b, c))
+    a)
+
+But if the argument is a complex expression that is on a single line, then the
+call will remain single line.
+
+  $ test "a(match x {})"
+  a(match x {})
+
+Calls can be bound to names.
+
+  $ test "let a = f(a, b, c) x"
+  let a = f(a, b, c)
+  x
+
+  $ test "let a = f(let a = a a, b, c) x"
+  let a =
+    f(
+      let a = a
+      a,
+      b,
+      c)
+  x
+
+Calls can be matched on.
+
+  $ test "match f(a, b, c) {}"
+  match f(a, b, c) {}
+
+A big nested call expression, with a multiline expression on the inside.
+
+  $ test "a(b(c(d(f(g(h(i(let a = a a))))))))"
+  a(
+    b(
+      c(
+        d(
+          f(
+            g(
+              h(
+                i(
+                  let a = a
+                  a))))))))
