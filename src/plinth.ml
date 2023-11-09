@@ -555,7 +555,6 @@ let reformat input =
 ;;
 
 module Env = Map.Make (String)
-module Type_env = Map.Make (Int)
 
 type env_entry =
   { mutable type_ : type_
