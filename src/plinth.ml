@@ -582,21 +582,35 @@ exception Unify_error
 let unify_error () = raise_notrace Unify_error
 
 let rec unify_types (a : type_) (b : type_) : type_ =
-  match a, b with
-  | Unknown, other | other, Unknown -> other
-  | Bits a, Bits b -> if Int.equal a b then Bits a else unify_error ()
-  | Pointer a, Pointer b -> Pointer (unify_types a b)
-  | Function a, Function b ->
-    let rec iter xs ys =
-      match xs, ys with
-      | [], [] -> []
-      | [], _ :: _ | _ :: _, [] -> unify_error ()
-      | x :: xs, y :: ys -> unify_types x y :: iter xs ys
-    in
-    Function { args = iter a.args b.args; return = unify_types a.return b.return }
-  | Unknown_bits, Unknown_bits -> Unknown_bits
-  | Unknown_bits, Bits x | Bits x, Unknown_bits -> Bits x
-  | _, _ -> unify_error ()
+  match a with
+  | Unknown -> b
+  | Unknown_bits ->
+    (match b with
+     | Unknown | Unknown_bits -> Unknown_bits
+     | Bits b -> Bits b
+     | Pointer _ | Function _ -> unify_error ())
+  | Bits a ->
+    (match b with
+     | Unknown | Unknown_bits -> Bits a
+     | Bits b -> if Int.equal a b then Bits a else unify_error ()
+     | Pointer _ | Function _ -> unify_error ())
+  | Pointer a ->
+    (match b with
+     | Unknown -> Pointer a
+     | Pointer b -> Pointer (unify_types a b)
+     | Unknown_bits | Bits _ | Function _ -> unify_error ())
+  | Function a ->
+    (match b with
+     | Unknown -> Function a
+     | Unknown_bits | Bits _ | Pointer _ -> unify_error ()
+     | Function b ->
+       let rec iter xs ys =
+         match xs, ys with
+         | [], [] -> []
+         | [], _ :: _ | _ :: _, [] -> unify_error ()
+         | x :: xs, y :: ys -> unify_types x y :: iter xs ys
+       in
+       Function { args = iter a.args b.args; return = unify_types a.return b.return })
 ;;
 
 let unify_types (a : type_) (b : type_) : type_ =
