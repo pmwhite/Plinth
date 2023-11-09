@@ -137,3 +137,51 @@ The name in a let expression may be given a type annotation.
   $ test "let a : 123 = 5 a"
   let a : 123 = 5
   a
+
+REC EXPRESSIONS
+
+A rec expression is a lot like let expression.
+
+It can bind expressions to names.
+
+  $ test "rec a = 123 a"
+  rec a = 123
+  a
+
+It can be nested and sequenced arbitrarily.
+
+  $ test "rec a = 123 rec b = x rec e = y c"
+  rec a = 123
+  rec b = x
+  rec e = y
+  c
+
+  $ test "rec a = rec b = rec c = 1 c b a"
+  rec a =
+    rec b =
+      rec c = 1
+      c
+    b
+  a
+
+But it can also bind more than one name at once. This is different from using
+multiple let bindings because the the expressions being bound can refer to the
+names to which they are being bound, thus enabling ordinary recursion and
+mutual recursion.
+
+  $ test "rec a = b & b = a a"
+  rec a = b
+  & b = a
+  a
+
+Nesting and type annotation can happen anywhere in the rec expression.
+
+  $ test "rec a = rec b:10 = rec c = d e & g = h i & x:10 = 10 j"
+  rec a =
+    rec b : 10 =
+      rec c = d
+      e
+    & g = h
+    i
+  & x : 10 = 10
+  j
