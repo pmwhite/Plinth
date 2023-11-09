@@ -1,0 +1,6 @@
+*.cmi
+*.cmxa
+*.cmx
+*.o
+*.a
+test/reformat
