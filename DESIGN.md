@@ -1,4 +1,4 @@
-# Lang 2
+# Plinth
 
 I want this language to be fun to use, fun to implement, and useful for
 building real software. Toward that end, the language should be minimal, the
