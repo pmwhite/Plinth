@@ -648,25 +648,85 @@ let args_and_return_of_function_type (type_ : type_) : type_ * type_ list =
   | Function fn_type -> fn_type.return, fn_type.args
 ;;
 
-let rec infer_type (env : env) (expr : expr) (incoming : type_) : type_ =
+[@@@warning "-37-32-69-34"]
+
+(* The stack machine maintains a "frame pointer" that all locations are
+   interpreted relative to. Calling a function causes the stack pointer to jump
+   forward by the frame size of that function. At any point in time, data
+   before the frame pointer comprises function arguments and local variables.
+   Arguments are passed to a function by copying them in order to locations
+   after the frame pointer. The return instruction causes the frame pointer to
+   return to its location before the current function was called, and also
+   writes the specified data into the location specified by the callsite.
+
+   The "call" instruction specifies the place on the stack where the function's
+   address is stored; all calls are indirect (at least at this level of
+   compilation).
+*)
+type case =
+  { data : string
+  ; goto : int
+  }
+
+type instr =
+  | Load of
+      { size : int
+      ; data : string
+      ; dest : int
+      }
+  | Copy of
+      { size : int
+      ; src : int
+      ; dest : int
+      }
+  | Call of
+      { src : int
+      ; size : int
+      ; dest : int
+      }
+  | Return of
+      { src : int
+      ; size : int
+      }
+  | Jump of
+      { src : int
+      ; size : int
+      ; dest : int
+      ; goto_size : int
+      ; cases : case list
+      }
+  | Debug of
+      { src : int
+      ; size : int
+      }
+
+type instrs = { mutable instrs : instr list }
+
+let instrs_add instrs instr = instrs.instrs <- instr :: instrs.instrs
+
+type dest =
+  | Return
+  | Stack of int
+
+let rec infer_type (env : env) (instrs : instrs) (expr : expr) (incoming : type_) : type_ =
   match expr with
-  | Identifier name -> env_find_and_infer env name incoming
+  | Identifier name -> env_find_and_infer env instrs name incoming
   | Integer i ->
     let type_ = unify_types incoming Unknown_bits in
     if type_is_fully_known type_
     then type_
     else user_error "Could not infer type of '%s' due to lack of information" i
-  | Comment { text = _; expr } -> infer_type env expr incoming
+  | Comment { text = _; expr } -> infer_type env instrs expr incoming
   | Let { binding; body } ->
     let entry : env_entry =
       match binding.type_ with
       | Some type_ ->
-        let type_ = infer_type env binding.expr type_ in
+        let type_ = infer_type env instrs binding.expr type_ in
         { type_; expr = None }
       | None -> { type_ = Unknown; expr = Some (env, binding.expr) }
     in
     let env = env_add env binding.name entry in
-    infer_type env body incoming
+    infer_type env instrs body incoming
   | Rec { bindings; body } ->
     let env =
       ListLabels.fold_left bindings ~init:env ~f:(fun env (binding : binding) ->
@@ -683,16 +743,16 @@ let rec infer_type (env : env) (expr : expr) (incoming : type_) : type_ =
     ListLabels.iter bindings ~f:(fun (binding : binding) ->
       match binding.type_ with
       | Some type_ ->
-        let (_ : type_) = env_find_and_infer env binding.name type_ in
+        let (_ : type_) = env_find_and_infer env instrs binding.name type_ in
         ()
       | None -> ());
-    infer_type env body incoming
+    infer_type env instrs body incoming
   | Match { expr; cases } ->
     let result =
       ListLabels.fold_left cases ~init:incoming ~f:(fun incoming (_, expr) ->
-        infer_type env expr incoming)
+        infer_type env instrs expr incoming)
     in
-    let (_ : type_) = infer_type env expr Unknown_bits in
+    let (_ : type_) = infer_type env instrs expr Unknown_bits in
     result
   | Fn { arg_names; body } ->
     let incoming_return, incoming_args =
@@ -718,10 +778,10 @@ let rec infer_type (env : env) (expr : expr) (incoming : type_) : type_ =
           in
           env_add env arg_name entry)
     in
-    let return = infer_type env body incoming_return in
+    let return = infer_type env instrs body incoming_return in
     let args =
       ListLabels.map arg_names ~f:(fun (arg_name, _) ->
-        env_find_and_infer env arg_name Unknown)
+        env_find_and_infer env instrs arg_name Unknown)
     in
     Function { args; return }
   | Call { fn; args } ->
@@ -730,23 +790,25 @@ let rec infer_type (env : env) (expr : expr) (incoming : type_) : type_ =
         let incoming =
           Function { return = incoming; args = ListLabels.map args ~f:(fun _ -> Unknown) }
         in
-        infer_type env fn incoming
+        infer_type env instrs fn incoming
       in
       args_and_return_of_function_type fn_type
     in
     ListLabels.iter2 fn_args args ~f:(fun fn_arg arg ->
-      let (_ : type_) = infer_type env arg fn_arg in
+      let (_ : type_) = infer_type env instrs arg fn_arg in
       ());
     unify_types fn_return incoming
 
-and env_find_and_infer (env : env) (name : string) (incoming : type_) : type_ =
+and env_find_and_infer (env : env) (instrs : instrs) (name : string) (incoming : type_)
+  : type_
+  =
   let entry = env_find env name in
   let incoming = unify_types incoming entry.type_ in
   let type_ =
     match entry.expr with
     | Some (env, expr) ->
       entry.expr <- None;
-      infer_type env expr incoming
+      infer_type env instrs expr incoming
     | None -> incoming
   in
   env_update env name type_;
@@ -759,7 +821,8 @@ let type_of input =
   let ps = { input; input_len = String.length input; index = 0 } in
   let expr = parse_program ps in
   let env = Env.empty in
-  let type_ = infer_type env expr Unknown in
+  let instrs = { instrs = [] } in
+  let type_ = infer_type env instrs expr Unknown in
   let output = { indent = 0; at_start_of_line = false; buffer = Buffer.create 1024 } in
   output_type output type_;
   Buffer.contents output.buffer
