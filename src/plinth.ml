@@ -570,16 +570,18 @@ and env = env_entry Env.t
 
 let env_add (env : env) (name : string) (entry : env_entry) : env = Env.add name entry env
 
-let env_update (env : env) (name : string) (type_ : type_) : unit =
-  match Env.find_opt name env with
-  | Some entry -> entry.type_ <- type_
-  | None -> user_error "Unbound name %s" name
-;;
-
-let env_find (env : env) (name : string) : env_entry =
+let env_find (fn_env : env) (env : env) (name : string) : env_entry =
   match Env.find_opt name env with
   | Some entry -> entry
-  | None -> user_error "Unbound name %s" name
+  | None ->
+    (match Env.find_opt name fn_env with
+     | Some entry -> entry
+     | None -> user_error "Unbound name %s" name)
+;;
+
+let env_update (fn_env : env) (env : env) (name : string) (type_ : type_) : unit =
+  let entry = env_find fn_env env name in
+  entry.type_ <- type_
 ;;
 
 exception Unify_error
@@ -648,25 +650,30 @@ let args_and_return_of_function_type (type_ : type_) : type_ * type_ list =
   | Function fn_type -> fn_type.return, fn_type.args
 ;;
 
-let rec infer_type (env : env) (expr : expr) (incoming : type_) : type_ =
+let rec infer_type (fn_env : env) (env : env) (expr : expr) (incoming : type_) : type_ =
   match expr with
-  | Identifier name -> env_find_and_infer env name incoming
+  | Identifier name -> env_find_and_infer fn_env env name incoming
   | Integer i ->
     let type_ = unify_types incoming Unknown_bits in
     if type_is_fully_known type_
     then type_
     else user_error "Could not infer type of '%s' due to lack of information" i
-  | Comment { text = _; expr } -> infer_type env expr incoming
+  | Comment { text = _; expr } -> infer_type fn_env env expr incoming
   | Let { binding; body } ->
     let entry : env_entry =
       match binding.type_ with
       | Some type_ ->
-        let type_ = infer_type env binding.expr type_ in
+        let type_ = infer_type fn_env env binding.expr type_ in
         { type_; expr = None }
       | None -> { type_ = Unknown; expr = Some (env, binding.expr) }
     in
     let env = env_add env binding.name entry in
-    infer_type env body incoming
+    let fn_env =
+      match binding.expr with
+      | Fn _ -> env_add fn_env binding.name entry
+      | Identifier _ | Integer _ | Comment _ | Let _ | Rec _ | Match _ | Call _ -> fn_env
+    in
+    infer_type fn_env env body incoming
   | Rec { bindings; body } ->
     let env =
       ListLabels.fold_left bindings ~init:env ~f:(fun env (binding : binding) ->
@@ -677,22 +684,28 @@ let rec infer_type (env : env) (expr : expr) (incoming : type_) : type_ =
         in
         env_add env binding.name entry)
     in
-    ListLabels.iter bindings ~f:(fun (binding : binding) ->
-      let entry = env_find env binding.name in
-      entry.expr <- Some (env, binding.expr));
+    let fn_env =
+      ListLabels.fold_left bindings ~init:fn_env ~f:(fun fn_env (binding : binding) ->
+        let entry = env_find fn_env env binding.name in
+        entry.expr <- Some (env, binding.expr);
+        match binding.expr with
+        | Fn _ -> env_add fn_env binding.name entry
+        | Identifier _ | Integer _ | Comment _ | Let _ | Rec _ | Match _ | Call _ ->
+          fn_env)
+    in
     ListLabels.iter bindings ~f:(fun (binding : binding) ->
       match binding.type_ with
       | Some type_ ->
-        let (_ : type_) = env_find_and_infer env binding.name type_ in
+        let (_ : type_) = env_find_and_infer fn_env env binding.name type_ in
         ()
       | None -> ());
-    infer_type env body incoming
+    infer_type fn_env env body incoming
   | Match { expr; cases } ->
     let result =
       ListLabels.fold_left cases ~init:incoming ~f:(fun incoming (_, expr) ->
-        infer_type env expr incoming)
+        infer_type fn_env env expr incoming)
     in
-    let (_ : type_) = infer_type env expr Unknown_bits in
+    let (_ : type_) = infer_type fn_env env expr Unknown_bits in
     result
   | Fn { arg_names; body } ->
     let incoming_return, incoming_args =
@@ -706,7 +719,7 @@ let rec infer_type (env : env) (expr : expr) (incoming : type_) : type_ =
       ListLabels.fold_left2
         incoming_args
         arg_names
-        ~init:env
+        ~init:Env.empty
         ~f:(fun env incoming_type (arg_name, annotation_type) ->
           let annotation_type =
             match annotation_type with
@@ -718,10 +731,10 @@ let rec infer_type (env : env) (expr : expr) (incoming : type_) : type_ =
           in
           env_add env arg_name entry)
     in
-    let return = infer_type env body incoming_return in
+    let return = infer_type fn_env env body incoming_return in
     let args =
       ListLabels.map arg_names ~f:(fun (arg_name, _) ->
-        env_find_and_infer env arg_name Unknown)
+        env_find_and_infer fn_env env arg_name Unknown)
     in
     Function { args; return }
   | Call { fn; args } ->
@@ -730,26 +743,28 @@ let rec infer_type (env : env) (expr : expr) (incoming : type_) : type_ =
         let incoming =
           Function { return = incoming; args = ListLabels.map args ~f:(fun _ -> Unknown) }
         in
-        infer_type env fn incoming
+        infer_type fn_env env fn incoming
       in
       args_and_return_of_function_type fn_type
     in
     ListLabels.iter2 fn_args args ~f:(fun fn_arg arg ->
-      let (_ : type_) = infer_type env arg fn_arg in
+      let (_ : type_) = infer_type fn_env env arg fn_arg in
       ());
     unify_types fn_return incoming
 
-and env_find_and_infer (env : env) (name : string) (incoming : type_) : type_ =
-  let entry = env_find env name in
+and env_find_and_infer (fn_env : env) (env : env) (name : string) (incoming : type_)
+  : type_
+  =
+  let entry = env_find fn_env env name in
   let incoming = unify_types incoming entry.type_ in
   let type_ =
     match entry.expr with
     | Some (env, expr) ->
       entry.expr <- None;
-      infer_type env expr incoming
+      infer_type fn_env env expr incoming
     | None -> incoming
   in
-  env_update env name type_;
+  env_update fn_env env name type_;
   if type_is_fully_known type_
   then type_
   else user_error "Could not infer type of '%s' due to lack of information" name
@@ -758,8 +773,9 @@ and env_find_and_infer (env : env) (name : string) (incoming : type_) : type_ =
 let type_of input =
   let ps = { input; input_len = String.length input; index = 0 } in
   let expr = parse_program ps in
+  let fn_env = Env.empty in
   let env = Env.empty in
-  let type_ = infer_type env expr Unknown in
+  let type_ = infer_type fn_env env expr Unknown in
   let output = { indent = 0; at_start_of_line = false; buffer = Buffer.create 1024 } in
   output_type output type_;
   Buffer.contents output.buffer
