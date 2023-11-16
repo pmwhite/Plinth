@@ -10,7 +10,10 @@ type type_ =
 
 type expr =
   | Identifier of string
-  | Integer of string
+  | Integer of
+      { data : string
+      ; mutable size : int
+      }
   | Comment of
       { text : string
       ; expr : expr
@@ -271,7 +274,7 @@ let rec parse_expr (ps : parse_state) : expr =
   then (
     let c = ps.input.[i] in
     match c with
-    | '+' | '-' | '0' .. '9' -> Integer (parse_integer ps)
+    | '+' | '-' | '0' .. '9' -> Integer { data = parse_integer ps; size = 0 }
     | '/' ->
       ps.index <- ps.index + 1;
       let text = parse_comment ps in
@@ -438,7 +441,7 @@ let rec is_multiline_expr (expr : expr) : bool =
 let rec output_expr (output : output) (expr : expr) : unit =
   match expr with
   | Identifier identifier -> output_string output identifier
-  | Integer integer -> output_string output integer
+  | Integer { data; size = _ } -> output_string output data
   | Comment { text; expr } ->
     output_string output "/";
     output_string output text;
@@ -656,8 +659,12 @@ let rec infer_type (fn_env : env) (env : env) (expr : expr) (incoming : type_) :
   | Integer i ->
     let type_ = unify_types incoming Unknown_bits in
     if type_is_fully_known type_
-    then type_
-    else user_error "Could not infer type of '%s' due to lack of information" i
+    then (
+      (match type_ with
+       | Bits size -> i.size <- size
+       | Unknown | Unknown_bits | Pointer _ | Function _ -> assert false);
+      type_)
+    else user_error "Could not infer type of '%s' due to lack of information" i.data
   | Comment { text = _; expr } -> infer_type fn_env env expr incoming
   | Let { binding; body } ->
     let entry : env_entry =
@@ -781,10 +788,42 @@ let type_of input =
   Buffer.contents output.buffer
 ;;
 
-type instrs = unit
+type instr =
+  | Load of
+      { size : int
+      ; data : string
+      ; dest : int
+      }
 
-let generate_stack_instrs (_expr : expr) : instrs = assert false
-let output_stack_instrs (_output : output) _instrs : unit = assert false
+type instrs = instr list
+
+let rec generate_stack_instrs (env : expr Env.t) (expr : expr) (dest : int) : instrs =
+  match expr with
+  | Identifier name ->
+    let expr = Env.find name env in
+    generate_stack_instrs env expr dest
+  | Integer { data; size } -> [ Load { size; data; dest } ]
+  | Comment _ -> assert false
+  | Let { binding; body } ->
+    let env = Env.add binding.name binding.expr env in
+    generate_stack_instrs env body dest
+  | Rec _ -> assert false
+  | Match _ -> assert false
+  | Fn _ -> assert false
+  | Call _ -> assert false
+;;
+
+let output_stack_instrs (output : output) (instrs : instrs) : unit =
+  ListLabels.iter instrs ~f:(fun instr ->
+    match instr with
+    | Load { size; data; dest } ->
+      output_string output "load ";
+      output_string output data;
+      output_string output ":";
+      output_string output (Int.to_string size);
+      output_string output " into ";
+      output_string output (Int.to_string dest))
+;;
 
 let stack_instrs input =
   let ps = { input; input_len = String.length input; index = 0 } in
@@ -793,7 +832,7 @@ let stack_instrs input =
   let env = Env.empty in
   let (_ : type_) = infer_type fn_env env expr Unknown in
   let output = { indent = 0; at_start_of_line = false; buffer = Buffer.create 1024 } in
-  let instrs = generate_stack_instrs expr in
+  let instrs = generate_stack_instrs Env.empty expr 0 in
   output_stack_instrs output instrs;
   Buffer.contents output.buffer
 ;;
