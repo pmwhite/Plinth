@@ -18,3 +18,10 @@ Some random examples.
   > x
   > EOF
   load 12:2 into 0
+
+  $ test "fn(x : 5) x"
+  0 (arity 1)
+    copy 0 to 0
+  
+  load_fn 0
+

@@ -794,35 +794,104 @@ type instr =
       ; data : string
       ; dest : int
       }
+  | Copy of
+      { src : int
+      ; dest : int
+      }
+  | Load_fn of { id : int }
 
-type instrs = instr list
+module Fns = Map.Make (Int)
 
-let rec generate_stack_instrs (env : expr Env.t) (expr : expr) (dest : int) : instrs =
+type fn =
+  { arity : int
+  ; instrs : instr list
+  }
+
+type fns =
+  { mutable fns : fn Fns.t
+  ; mutable next_id : int
+  }
+
+let fns_add (fns : fns) (arity : int) (instrs : instr list) : int =
+  let id = fns.next_id in
+  fns.next_id <- fns.next_id + 1;
+  fns.fns <- Fns.add id { arity; instrs } fns.fns;
+  id
+;;
+
+type gen_env_entry =
+  | Not_yet_compiled of expr
+  | On_stack of int
+
+let rec generate_stack_instrs
+  (fns : fns)
+  (env : gen_env_entry Env.t)
+  (expr : expr)
+  (dest : int)
+  : instr list
+  =
   match expr with
   | Identifier name ->
-    let expr = Env.find name env in
-    generate_stack_instrs env expr dest
+    (match Env.find name env with
+     | Not_yet_compiled expr -> generate_stack_instrs fns env expr dest
+     | On_stack src -> [ Copy { src; dest } ])
   | Integer { data; size } -> [ Load { size; data; dest } ]
-  | Comment { text = _; expr } -> generate_stack_instrs env expr dest
+  | Comment { text = _; expr } -> generate_stack_instrs fns env expr dest
   | Let { binding; body } ->
-    let env = Env.add binding.name binding.expr env in
-    generate_stack_instrs env body dest
+    let env = Env.add binding.name (Not_yet_compiled binding.expr) env in
+    generate_stack_instrs fns env body dest
   | Rec _ -> assert false
   | Match _ -> assert false
-  | Fn _ -> assert false
+  | Fn { arg_names; body } ->
+    let env, arity =
+      ListLabels.fold_left
+        arg_names
+        ~init:(Env.empty, 0)
+        ~f:(fun (env, i) (arg_name, _) -> Env.add arg_name (On_stack i) env, i + 1)
+    in
+    let instrs = generate_stack_instrs (fns : fns) env body 0 in
+    let id = fns_add fns arity instrs in
+    [ Load_fn { id } ]
   | Call _ -> assert false
 ;;
 
-let output_stack_instrs (output : output) (instrs : instrs) : unit =
-  ListLabels.iter instrs ~f:(fun instr ->
-    match instr with
-    | Load { size; data; dest } ->
-      output_string output "load ";
-      output_string output data;
-      output_string output ":";
-      output_string output (Int.to_string size);
-      output_string output " into ";
-      output_string output (Int.to_string dest))
+let output_stack_instrs (output : output) (instrs : instr list) : unit =
+  iter_sep_by
+    instrs
+    ~sep:(fun () -> output_newline output)
+    ~f:(fun instr ->
+      match instr with
+      | Load { size; data; dest } ->
+        output_string output "load ";
+        output_string output data;
+        output_string output ":";
+        output_string output (Int.to_string size);
+        output_string output " into ";
+        output_string output (Int.to_string dest)
+      | Load_fn { id } ->
+        output_string output "load_fn ";
+        output_string output (Int.to_string id)
+      | Copy { src; dest } ->
+        output_string output "copy ";
+        output_string output (Int.to_string src);
+        output_string output " to ";
+        output_string output (Int.to_string dest))
+;;
+
+let output_fns (output : output) (fns : fns) : unit =
+  ListLabels.iter
+    (Fns.to_seq fns.fns |> List.of_seq)
+    ~f:(fun (id, { arity; instrs }) ->
+      output_string output (Int.to_string id);
+      output_string output " (arity ";
+      output_string output (Int.to_string arity);
+      output_string output ")";
+      output_newline output;
+      output_indent output;
+      output_stack_instrs output instrs;
+      output_dedent output;
+      output_newline output;
+      output_newline output)
 ;;
 
 let stack_instrs input =
@@ -831,8 +900,10 @@ let stack_instrs input =
   let fn_env = Env.empty in
   let env = Env.empty in
   let (_ : type_) = infer_type fn_env env expr Unknown in
+  let fns = { fns = Fns.empty; next_id = 0 } in
+  let instrs = generate_stack_instrs fns Env.empty expr 0 in
   let output = { indent = 0; at_start_of_line = false; buffer = Buffer.create 1024 } in
-  let instrs = generate_stack_instrs Env.empty expr 0 in
+  output_fns output fns;
   output_stack_instrs output instrs;
   Buffer.contents output.buffer
 ;;
