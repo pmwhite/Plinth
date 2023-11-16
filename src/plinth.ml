@@ -803,7 +803,7 @@ let rec generate_stack_instrs (env : expr Env.t) (expr : expr) (dest : int) : in
     let expr = Env.find name env in
     generate_stack_instrs env expr dest
   | Integer { data; size } -> [ Load { size; data; dest } ]
-  | Comment _ -> assert false
+  | Comment { text = _; expr } -> generate_stack_instrs env expr dest
   | Let { binding; body } ->
     let env = Env.add binding.name binding.expr env in
     generate_stack_instrs env body dest
