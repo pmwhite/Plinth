@@ -5,5 +5,7 @@
 *.a
 test/reformat
 test/type_of
+test/stack_instrs
 *.t.rej
 *.t.orig
+*.t.err

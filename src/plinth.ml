@@ -780,3 +780,20 @@ let type_of input =
   output_type output type_;
   Buffer.contents output.buffer
 ;;
+
+type instrs = unit
+
+let generate_stack_instrs (_expr : expr) : instrs = assert false
+let output_stack_instrs (_output : output) _instrs : unit = assert false
+
+let stack_instrs input =
+  let ps = { input; input_len = String.length input; index = 0 } in
+  let expr = parse_program ps in
+  let fn_env = Env.empty in
+  let env = Env.empty in
+  let (_ : type_) = infer_type fn_env env expr Unknown in
+  let output = { indent = 0; at_start_of_line = false; buffer = Buffer.create 1024 } in
+  let instrs = generate_stack_instrs expr in
+  output_stack_instrs output instrs;
+  Buffer.contents output.buffer
+;;
