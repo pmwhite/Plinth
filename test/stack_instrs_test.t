@@ -9,8 +9,12 @@ To keep each test succinct, we make some helper functions.
 
 Some random examples.
 
+A simple let expression.
+
   $ test "let x : 10 = 12 x"
   load 12:10 into 0
+
+Comments work just like the expression they are attached to.
 
   $ test_file <<EOF
   > / this is a comment
@@ -18,6 +22,9 @@ Some random examples.
   > x
   > EOF
   load 12:2 into 0
+
+Functions get hoisted to the top-level, and then referred to there-after with
+an integer.
 
   $ test "fn(x : 5) x"
   0 (arity 1)
