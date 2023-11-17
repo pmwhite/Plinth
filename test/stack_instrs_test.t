@@ -12,7 +12,7 @@ Some random examples.
 A simple let expression.
 
   $ test "let x : 10 = 12 x"
-  load 12:10 into 0
+  push_fn 12:10
 
 Comments work just like the expression they are attached to.
 
@@ -21,14 +21,14 @@ Comments work just like the expression they are attached to.
   > let x : 2 = 12
   > x
   > EOF
-  load 12:2 into 0
+  push_fn 12:2
 
 Functions get hoisted to the top-level, and then referred to there-after with
 an integer.
 
   $ test "fn(x : 5) x"
   0 (arity 1)
-    copy 0 to 0
+    dup 0
   
-  load_fn 0
+  push_fn 0
 

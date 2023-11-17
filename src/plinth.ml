@@ -789,16 +789,12 @@ let type_of input =
 ;;
 
 type instr =
-  | Load of
+  | Push_data of
       { size : int
       ; data : string
-      ; dest : int
       }
-  | Copy of
-      { src : int
-      ; dest : int
-      }
-  | Load_fn of { id : int }
+  | Push_fn of { id : int }
+  | Dup of { src : int }
 
 module Fns = Map.Make (Int)
 
@@ -823,23 +819,19 @@ type gen_env_entry =
   | Not_yet_compiled of expr
   | On_stack of int
 
-let rec generate_stack_instrs
-  (fns : fns)
-  (env : gen_env_entry Env.t)
-  (expr : expr)
-  (dest : int)
+let rec generate_stack_instrs (fns : fns) (env : gen_env_entry Env.t) (expr : expr)
   : instr list
   =
   match expr with
   | Identifier name ->
     (match Env.find name env with
-     | Not_yet_compiled expr -> generate_stack_instrs fns env expr dest
-     | On_stack src -> [ Copy { src; dest } ])
-  | Integer { data; size } -> [ Load { size; data; dest } ]
-  | Comment { text = _; expr } -> generate_stack_instrs fns env expr dest
+     | Not_yet_compiled expr -> generate_stack_instrs fns env expr
+     | On_stack src -> [ Dup { src } ])
+  | Integer { data; size } -> [ Push_data { size; data } ]
+  | Comment { text = _; expr } -> generate_stack_instrs fns env expr
   | Let { binding; body } ->
     let env = Env.add binding.name (Not_yet_compiled binding.expr) env in
-    generate_stack_instrs fns env body dest
+    generate_stack_instrs fns env body
   | Rec _ -> assert false
   | Match _ -> assert false
   | Fn { arg_names; body } ->
@@ -849,9 +841,9 @@ let rec generate_stack_instrs
         ~init:(Env.empty, 0)
         ~f:(fun (env, i) (arg_name, _) -> Env.add arg_name (On_stack i) env, i + 1)
     in
-    let instrs = generate_stack_instrs (fns : fns) env body 0 in
+    let instrs = generate_stack_instrs (fns : fns) env body in
     let id = fns_add fns arity instrs in
-    [ Load_fn { id } ]
+    [ Push_fn { id } ]
   | Call _ -> assert false
 ;;
 
@@ -861,21 +853,17 @@ let output_stack_instrs (output : output) (instrs : instr list) : unit =
     ~sep:(fun () -> output_newline output)
     ~f:(fun instr ->
       match instr with
-      | Load { size; data; dest } ->
-        output_string output "load ";
+      | Push_data { size; data } ->
+        output_string output "push_fn ";
         output_string output data;
         output_string output ":";
-        output_string output (Int.to_string size);
-        output_string output " into ";
-        output_string output (Int.to_string dest)
-      | Load_fn { id } ->
-        output_string output "load_fn ";
+        output_string output (Int.to_string size)
+      | Push_fn { id } ->
+        output_string output "push_fn ";
         output_string output (Int.to_string id)
-      | Copy { src; dest } ->
-        output_string output "copy ";
-        output_string output (Int.to_string src);
-        output_string output " to ";
-        output_string output (Int.to_string dest))
+      | Dup { src } ->
+        output_string output "dup ";
+        output_string output (Int.to_string src))
 ;;
 
 let output_fns (output : output) (fns : fns) : unit =
@@ -901,7 +889,7 @@ let stack_instrs input =
   let env = Env.empty in
   let (_ : type_) = infer_type fn_env env expr Unknown in
   let fns = { fns = Fns.empty; next_id = 0 } in
-  let instrs = generate_stack_instrs fns Env.empty expr 0 in
+  let instrs = generate_stack_instrs fns Env.empty expr in
   let output = { indent = 0; at_start_of_line = false; buffer = Buffer.create 1024 } in
   output_fns output fns;
   output_stack_instrs output instrs;
