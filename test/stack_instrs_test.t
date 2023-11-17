@@ -32,3 +32,49 @@ an integer.
   
   push_fn 0
 
+To call a function, we push its arguments onto the stack in reverse, order,
+followed by the function being called, and then invoke the function.
+
+TODO: The output below contains two copies of each function because each is
+used more than once. This is a bug; we should notice when a variable is used
+more than once and needs to be saved.
+
+  $ test_file <<EOF
+  > let f = fn(x:1) x
+  > let g = fn(x:1) x
+  > let h = fn(x:1, y:1) x
+  > f(g(h(1,h(f(1), f(1)))))
+  > EOF
+  0 (arity 1)
+    dup 0
+  
+  1 (arity 1)
+    dup 0
+  
+  2 (arity 2)
+    dup 0
+  
+  3 (arity 2)
+    dup 0
+  
+  4 (arity 1)
+    dup 0
+  
+  5 (arity 1)
+    dup 0
+  
+  push_fn 1:1
+  push_fn 4
+  call
+  push_fn 1:1
+  push_fn 5
+  call
+  push_fn 3
+  call
+  push_fn 1:1
+  push_fn 2
+  call
+  push_fn 1
+  call
+  push_fn 0
+  call

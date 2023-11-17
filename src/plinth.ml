@@ -795,6 +795,7 @@ type instr =
       }
   | Push_fn of { id : int }
   | Dup of { src : int }
+  | Call
 
 module Fns = Map.Make (Int)
 
@@ -844,7 +845,11 @@ let rec generate_stack_instrs (fns : fns) (env : gen_env_entry Env.t) (expr : ex
     let instrs = generate_stack_instrs (fns : fns) env body in
     let id = fns_add fns arity instrs in
     [ Push_fn { id } ]
-  | Call _ -> assert false
+  | Call { fn; args } ->
+    ListLabels.concat_map (List.rev args) ~f:(fun arg ->
+      generate_stack_instrs fns env arg)
+    @ generate_stack_instrs fns env fn
+    @ [ Call ]
 ;;
 
 let output_stack_instrs (output : output) (instrs : instr list) : unit =
@@ -863,7 +868,8 @@ let output_stack_instrs (output : output) (instrs : instr list) : unit =
         output_string output (Int.to_string id)
       | Dup { src } ->
         output_string output "dup ";
-        output_string output (Int.to_string src))
+        output_string output (Int.to_string src)
+      | Call -> output_string output "call")
 ;;
 
 let output_fns (output : output) (fns : fns) : unit =
