@@ -35,10 +35,6 @@ an integer.
 To call a function, we push its arguments onto the stack in reverse, order,
 followed by the function being called, and then invoke the function.
 
-TODO: The output below contains two copies of each function because each is
-used more than once. This is a bug; we should notice when a variable is used
-more than once and needs to be saved.
-
   $ test_file <<EOF
   > let f = fn(x:1) x
   > let g = fn(x:1) x
@@ -54,22 +50,13 @@ more than once and needs to be saved.
   2 (arity 2)
     dup 0
   
-  3 (arity 2)
-    dup 0
-  
-  4 (arity 1)
-    dup 0
-  
-  5 (arity 1)
-    dup 0
-  
   push_fn 1:1
-  push_fn 4
+  push_fn 0
   call
   push_fn 1:1
-  push_fn 5
+  push_fn 0
   call
-  push_fn 3
+  push_fn 2
   call
   push_fn 1:1
   push_fn 2

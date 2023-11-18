@@ -816,40 +816,54 @@ let fns_add (fns : fns) (arity : int) (instrs : instr list) : int =
   id
 ;;
 
-type gen_env_entry =
+type gen_env_state =
   | Not_yet_compiled of expr
   | On_stack of int
+  | Fn_id of int
+
+type gen_env_entry = { mutable state : gen_env_state }
 
 let rec generate_stack_instrs (fns : fns) (env : gen_env_entry Env.t) (expr : expr)
   : instr list
   =
   match expr with
   | Identifier name ->
-    (match Env.find name env with
-     | Not_yet_compiled expr -> generate_stack_instrs fns env expr
-     | On_stack src -> [ Dup { src } ])
+    let entry = Env.find name env in
+    (match entry.state with
+     | Not_yet_compiled expr ->
+       (match expr with
+        | Fn { arg_names; body } ->
+          let id = generate_function fns env arg_names body in
+          entry.state <- Fn_id id;
+          [ Push_fn { id } ]
+        | Identifier _ | Integer _ | Comment _ | Let _ | Rec _ | Match _ | Call _ ->
+          generate_stack_instrs fns env expr)
+     | On_stack src -> [ Dup { src } ]
+     | Fn_id id -> [ Push_fn { id } ])
   | Integer { data; size } -> [ Push_data { size; data } ]
   | Comment { text = _; expr } -> generate_stack_instrs fns env expr
   | Let { binding; body } ->
-    let env = Env.add binding.name (Not_yet_compiled binding.expr) env in
+    let env = Env.add binding.name { state = Not_yet_compiled binding.expr } env in
     generate_stack_instrs fns env body
   | Rec _ -> assert false
   | Match _ -> assert false
   | Fn { arg_names; body } ->
-    let env, arity =
-      ListLabels.fold_left
-        arg_names
-        ~init:(Env.empty, 0)
-        ~f:(fun (env, i) (arg_name, _) -> Env.add arg_name (On_stack i) env, i + 1)
-    in
-    let instrs = generate_stack_instrs (fns : fns) env body in
-    let id = fns_add fns arity instrs in
+    let id = generate_function fns env arg_names body in
     [ Push_fn { id } ]
   | Call { fn; args } ->
     ListLabels.concat_map (List.rev args) ~f:(fun arg ->
       generate_stack_instrs fns env arg)
     @ generate_stack_instrs fns env fn
     @ [ Call ]
+
+and generate_function (fns : fns) (_env : gen_env_entry Env.t) arg_names body : int =
+  (* TODO: Use fn_env and env separately instead of putting al the names in just env. *)
+  let env, arity =
+    ListLabels.fold_left arg_names ~init:(Env.empty, 0) ~f:(fun (env, i) (arg_name, _) ->
+      Env.add arg_name { state = On_stack i } env, i + 1)
+  in
+  let instrs = generate_stack_instrs fns env body in
+  fns_add fns arity instrs
 ;;
 
 let output_stack_instrs (output : output) (instrs : instr list) : unit =
