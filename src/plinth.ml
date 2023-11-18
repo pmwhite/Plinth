@@ -585,11 +585,6 @@ let env_find (fn_env : env) (env : env) (name : string) : env_entry =
      | None -> user_error "Unbound name %s" name)
 ;;
 
-let env_update (fn_env : env) (env : env) (name : string) (type_ : type_) : unit =
-  let entry = env_find fn_env env name in
-  entry.type_ <- type_
-;;
-
 exception Unify_error
 
 let unify_error () = raise_notrace Unify_error
@@ -774,7 +769,8 @@ and env_find_and_infer (fn_env : env) (env : env) (name : string) (incoming : ty
       infer_type fn_env env expr incoming
     | None -> incoming
   in
-  env_update fn_env env name type_;
+  let entry = env_find fn_env env name in
+  entry.type_ <- type_;
   if type_is_fully_known type_
   then type_
   else user_error "Could not infer type of '%s' due to lack of information" name
