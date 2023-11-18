@@ -12,7 +12,7 @@ Some random examples.
 A simple let expression.
 
   $ test "let x : 10 = 12 x"
-  push_fn 12:10
+  push 12:10
 
 Comments work just like the expression they are attached to.
 
@@ -21,7 +21,7 @@ Comments work just like the expression they are attached to.
   > let x : 2 = 12
   > x
   > EOF
-  push_fn 12:2
+  push 12:2
 
 Functions get hoisted to the top-level, and then referred to there-after with
 an integer.
@@ -30,7 +30,7 @@ an integer.
   0 (arity 1)
     dup 0
   
-  push_fn 0
+  fn 0
 
 To call a function, we push its arguments onto the stack in reverse, order,
 followed by the function being called, and then invoke the function.
@@ -50,18 +50,18 @@ followed by the function being called, and then invoke the function.
   2 (arity 2)
     dup 0
   
-  push_fn 1:1
-  push_fn 0
+  push 1:1
+  fn 0
   call
-  push_fn 1:1
-  push_fn 0
+  push 1:1
+  fn 0
   call
-  push_fn 2
+  fn 2
   call
-  push_fn 1:1
-  push_fn 2
+  push 1:1
+  fn 2
   call
-  push_fn 1
+  fn 1
   call
-  push_fn 0
+  fn 0
   call

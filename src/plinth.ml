@@ -878,12 +878,12 @@ let output_stack_instrs (output : output) (instrs : stack_instr list) : unit =
     ~f:(fun instr ->
       match instr with
       | Push_data { size; data } ->
-        output_string output "push_fn ";
+        output_string output "push ";
         output_string output data;
         output_string output ":";
         output_string output (Int.to_string size)
       | Push_fn { id } ->
-        output_string output "push_fn ";
+        output_string output "fn ";
         output_string output (Int.to_string id)
       | Dup { src } ->
         output_string output "dup ";
