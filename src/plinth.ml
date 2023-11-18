@@ -791,7 +791,7 @@ let type_of input =
   Buffer.contents output.buffer
 ;;
 
-type instr =
+type stack_instr =
   | Push_data of
       { size : int
       ; data : string
@@ -800,42 +800,42 @@ type instr =
   | Dup of { src : int }
   | Call
 
-type fn =
+type stack_fn =
   { arity : int
-  ; instrs : instr list
+  ; instrs : stack_instr list
   }
 
-type fns =
-  { mutable fns : fn Int_map.t
+type stack_fns =
+  { mutable fns : stack_fn Int_map.t
   ; mutable next_id : int
   }
 
-let fns_add (fns : fns) (arity : int) (instrs : instr list) : int =
+let stack_fns_add (fns : stack_fns) (arity : int) (instrs : stack_instr list) : int =
   let id = fns.next_id in
   fns.next_id <- fns.next_id + 1;
   fns.fns <- Int_map.add id { arity; instrs } fns.fns;
   id
 ;;
 
-type gen_env_state =
-  | Not_yet_compiled of expr
+type stack_env_entry_state =
+  | Not_yet_compiled of stack_env * expr
   | On_stack of int
   | Fn_id of int
 
-type gen_env_entry = { mutable state : gen_env_state }
+and stack_env = stack_env_entry_state ref String_map.t
 
-let rec generate_stack_instrs (fns : fns) (env : gen_env_entry String_map.t) (expr : expr)
-  : instr list
+let rec generate_stack_instrs (fns : stack_fns) (env : stack_env) (expr : expr)
+  : stack_instr list
   =
   match expr with
   | Identifier name ->
     let entry = String_map.find name env in
-    (match entry.state with
-     | Not_yet_compiled expr ->
+    (match !entry with
+     | Not_yet_compiled (env, expr) ->
        (match expr with
         | Fn { arg_names; body } ->
           let id = generate_function fns env arg_names body in
-          entry.state <- Fn_id id;
+          entry := Fn_id id;
           [ Push_fn { id } ]
         | Identifier _ | Integer _ | Comment _ | Let _ | Rec _ | Match _ | Call _ ->
           generate_stack_instrs fns env expr)
@@ -844,7 +844,8 @@ let rec generate_stack_instrs (fns : fns) (env : gen_env_entry String_map.t) (ex
   | Integer { data; size } -> [ Push_data { size; data } ]
   | Comment { text = _; expr } -> generate_stack_instrs fns env expr
   | Let { binding; body } ->
-    let env = String_map.add binding.name { state = Not_yet_compiled binding.expr } env in
+    let entry = ref (Not_yet_compiled (env, binding.expr)) in
+    let env = String_map.add binding.name entry env in
     generate_stack_instrs fns env body
   | Rec _ -> assert false
   | Match _ -> assert false
@@ -857,21 +858,20 @@ let rec generate_stack_instrs (fns : fns) (env : gen_env_entry String_map.t) (ex
     @ generate_stack_instrs fns env fn
     @ [ Call ]
 
-and generate_function (fns : fns) (_env : gen_env_entry String_map.t) arg_names body : int
-  =
+and generate_function (fns : stack_fns) (_env : stack_env) arg_names body : int =
   (* TODO: Use fn_env and env separately instead of putting al the names in just env. *)
   let env, arity =
     ListLabels.fold_left
       arg_names
       ~init:(String_map.empty, 0)
       ~f:(fun (env, i) (arg_name, _) ->
-        String_map.add arg_name { state = On_stack i } env, i + 1)
+        String_map.add arg_name (ref (On_stack i)) env, i + 1)
   in
   let instrs = generate_stack_instrs fns env body in
-  fns_add fns arity instrs
+  stack_fns_add fns arity instrs
 ;;
 
-let output_stack_instrs (output : output) (instrs : instr list) : unit =
+let output_stack_instrs (output : output) (instrs : stack_instr list) : unit =
   iter_sep_by
     instrs
     ~sep:(fun () -> output_newline output)
@@ -891,7 +891,7 @@ let output_stack_instrs (output : output) (instrs : instr list) : unit =
       | Call -> output_string output "call")
 ;;
 
-let output_fns (output : output) (fns : fns) : unit =
+let output_fns (output : output) (fns : stack_fns) : unit =
   ListLabels.iter
     (Int_map.to_seq fns.fns |> List.of_seq)
     ~f:(fun (id, { arity; instrs }) ->
