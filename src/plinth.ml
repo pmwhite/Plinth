@@ -1,3 +1,6 @@
+module String_map = Map.Make (String)
+module Int_map = Map.Make (Int)
+
 type type_ =
   | Unknown
   | Unknown_bits
@@ -562,22 +565,22 @@ let reformat input =
   Buffer.contents output.buffer
 ;;
 
-module Env = Map.Make (String)
-
 type env_entry =
   { mutable type_ : type_
   ; mutable expr : (env * expr) option
   }
 
-and env = env_entry Env.t
+and env = env_entry String_map.t
 
-let env_add (env : env) (name : string) (entry : env_entry) : env = Env.add name entry env
+let env_add (env : env) (name : string) (entry : env_entry) : env =
+  String_map.add name entry env
+;;
 
 let env_find (fn_env : env) (env : env) (name : string) : env_entry =
-  match Env.find_opt name env with
+  match String_map.find_opt name env with
   | Some entry -> entry
   | None ->
-    (match Env.find_opt name fn_env with
+    (match String_map.find_opt name fn_env with
      | Some entry -> entry
      | None -> user_error "Unbound name %s" name)
 ;;
@@ -726,7 +729,7 @@ let rec infer_type (fn_env : env) (env : env) (expr : expr) (incoming : type_) :
       ListLabels.fold_left2
         incoming_args
         arg_names
-        ~init:Env.empty
+        ~init:String_map.empty
         ~f:(fun env incoming_type (arg_name, annotation_type) ->
           let annotation_type =
             match annotation_type with
@@ -780,8 +783,8 @@ and env_find_and_infer (fn_env : env) (env : env) (name : string) (incoming : ty
 let type_of input =
   let ps = { input; input_len = String.length input; index = 0 } in
   let expr = parse_program ps in
-  let fn_env = Env.empty in
-  let env = Env.empty in
+  let fn_env = String_map.empty in
+  let env = String_map.empty in
   let type_ = infer_type fn_env env expr Unknown in
   let output = { indent = 0; at_start_of_line = false; buffer = Buffer.create 1024 } in
   output_type output type_;
@@ -797,22 +800,20 @@ type instr =
   | Dup of { src : int }
   | Call
 
-module Fns = Map.Make (Int)
-
 type fn =
   { arity : int
   ; instrs : instr list
   }
 
 type fns =
-  { mutable fns : fn Fns.t
+  { mutable fns : fn Int_map.t
   ; mutable next_id : int
   }
 
 let fns_add (fns : fns) (arity : int) (instrs : instr list) : int =
   let id = fns.next_id in
   fns.next_id <- fns.next_id + 1;
-  fns.fns <- Fns.add id { arity; instrs } fns.fns;
+  fns.fns <- Int_map.add id { arity; instrs } fns.fns;
   id
 ;;
 
@@ -823,12 +824,12 @@ type gen_env_state =
 
 type gen_env_entry = { mutable state : gen_env_state }
 
-let rec generate_stack_instrs (fns : fns) (env : gen_env_entry Env.t) (expr : expr)
+let rec generate_stack_instrs (fns : fns) (env : gen_env_entry String_map.t) (expr : expr)
   : instr list
   =
   match expr with
   | Identifier name ->
-    let entry = Env.find name env in
+    let entry = String_map.find name env in
     (match entry.state with
      | Not_yet_compiled expr ->
        (match expr with
@@ -843,7 +844,7 @@ let rec generate_stack_instrs (fns : fns) (env : gen_env_entry Env.t) (expr : ex
   | Integer { data; size } -> [ Push_data { size; data } ]
   | Comment { text = _; expr } -> generate_stack_instrs fns env expr
   | Let { binding; body } ->
-    let env = Env.add binding.name { state = Not_yet_compiled binding.expr } env in
+    let env = String_map.add binding.name { state = Not_yet_compiled binding.expr } env in
     generate_stack_instrs fns env body
   | Rec _ -> assert false
   | Match _ -> assert false
@@ -856,11 +857,15 @@ let rec generate_stack_instrs (fns : fns) (env : gen_env_entry Env.t) (expr : ex
     @ generate_stack_instrs fns env fn
     @ [ Call ]
 
-and generate_function (fns : fns) (_env : gen_env_entry Env.t) arg_names body : int =
+and generate_function (fns : fns) (_env : gen_env_entry String_map.t) arg_names body : int
+  =
   (* TODO: Use fn_env and env separately instead of putting al the names in just env. *)
   let env, arity =
-    ListLabels.fold_left arg_names ~init:(Env.empty, 0) ~f:(fun (env, i) (arg_name, _) ->
-      Env.add arg_name { state = On_stack i } env, i + 1)
+    ListLabels.fold_left
+      arg_names
+      ~init:(String_map.empty, 0)
+      ~f:(fun (env, i) (arg_name, _) ->
+        String_map.add arg_name { state = On_stack i } env, i + 1)
   in
   let instrs = generate_stack_instrs fns env body in
   fns_add fns arity instrs
@@ -888,7 +893,7 @@ let output_stack_instrs (output : output) (instrs : instr list) : unit =
 
 let output_fns (output : output) (fns : fns) : unit =
   ListLabels.iter
-    (Fns.to_seq fns.fns |> List.of_seq)
+    (Int_map.to_seq fns.fns |> List.of_seq)
     ~f:(fun (id, { arity; instrs }) ->
       output_string output (Int.to_string id);
       output_string output " (arity ";
@@ -905,11 +910,11 @@ let output_fns (output : output) (fns : fns) : unit =
 let stack_instrs input =
   let ps = { input; input_len = String.length input; index = 0 } in
   let expr = parse_program ps in
-  let fn_env = Env.empty in
-  let env = Env.empty in
+  let fn_env = String_map.empty in
+  let env = String_map.empty in
   let (_ : type_) = infer_type fn_env env expr Unknown in
-  let fns = { fns = Fns.empty; next_id = 0 } in
-  let instrs = generate_stack_instrs fns Env.empty expr in
+  let fns = { fns = Int_map.empty; next_id = 0 } in
+  let instrs = generate_stack_instrs fns String_map.empty expr in
   let output = { indent = 0; at_start_of_line = false; buffer = Buffer.create 1024 } in
   output_fns output fns;
   output_stack_instrs output instrs;
