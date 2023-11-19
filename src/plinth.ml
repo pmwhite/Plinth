@@ -46,6 +46,7 @@ type expr =
 
 and binding =
   { name : string
+  ; usages : int ref
   ; type_ : type_ option
   ; expr : expr
   }
@@ -357,7 +358,7 @@ and parse_binding (ps : parse_state) : binding =
   parse_equals ps;
   parse_whitespace ps;
   let expr = parse_expr ps in
-  { name; type_; expr }
+  { name; usages = ref 0; type_; expr }
 
 and parse_rec_bindings (ps : parse_state) : binding list =
   if ps.index < ps.input_len && Char.equal ps.input.[ps.index] '&'
@@ -545,7 +546,7 @@ and output_name_and_type (output : output) name type_ : unit =
     output_string output " : ";
     output_type output type_
 
-and output_binding (output : output) ({ name; type_; expr } : binding) : unit =
+and output_binding (output : output) ({ name; usages = _; type_; expr } : binding) : unit =
   output_name_and_type output name type_;
   output_string output " =";
   if is_multiline_expr expr
@@ -569,6 +570,7 @@ let reformat input =
 
 type 'a env_entry =
   { level : int
+  ; usages : int ref
   ; mutable data : 'a
   ; mutable expr : ('a env * expr) option
   }
@@ -584,15 +586,25 @@ let expr_is_constant (expr : expr) =
   | Comment _ | Identifier _ | Let _ | Rec _ | Match _ | Call _ -> false
 ;;
 
-let env_add (env : 'a env) (name : string) (data : 'a) (expr : expr option) : 'a env =
-  let expr, level =
-    match expr with
-    | Some expr ->
-      let level = if expr_is_constant expr then 0 else env.level in
-      Some (env, expr), level
-    | None -> None, env.level
-  in
-  { env with entries = String_map.add name { level; data; expr } env.entries }
+let env_add_binding (env : 'a env) (binding : binding) (data : 'a) : 'a env =
+  let level = if expr_is_constant binding.expr then 0 else env.level in
+  { env with
+    entries =
+      String_map.add
+        binding.name
+        { level; usages = binding.usages; data; expr = Some (env, binding.expr) }
+        env.entries
+  }
+;;
+
+let env_add_no_expr (env : 'a env) (name : string) (data : 'a) : 'a env =
+  { env with
+    entries =
+      String_map.add
+        name
+        { level = env.level; usages = ref 0; data; expr = None }
+        env.entries
+  }
 ;;
 
 let env_find (env : 'a env) (name : string) : 'a env_entry =
@@ -678,7 +690,10 @@ let args_and_return_of_function_type (type_ : type_) : type_ * type_ list =
 
 let rec infer_type (env : type_ env) (expr : expr) (incoming : type_) : type_ =
   match expr with
-  | Identifier name -> type_env_find_and_infer env name incoming
+  | Identifier identifier ->
+    let entry = env_find env identifier in
+    incr entry.usages;
+    infer_entry_type entry identifier incoming
   | Integer i ->
     let type_ = unify_types incoming Unknown_bits in
     if type_is_fully_known type_
@@ -694,16 +709,16 @@ let rec infer_type (env : type_ env) (expr : expr) (incoming : type_) : type_ =
       match binding.type_ with
       | Some type_ ->
         let type_ = infer_type env binding.expr type_ in
-        env_add env binding.name type_ (Some binding.expr)
-      | None -> env_add env binding.name Unknown (Some binding.expr)
+        env_add_binding env binding type_
+      | None -> env_add_binding env binding Unknown
     in
     infer_type env body incoming
   | Rec { bindings; body } ->
     let env =
       ListLabels.fold_left bindings ~init:env ~f:(fun env (binding : binding) ->
         match binding.type_ with
-        | Some type_ -> env_add env binding.name type_ (Some binding.expr)
-        | None -> env_add env binding.name Unknown (Some binding.expr))
+        | Some type_ -> env_add_binding env binding type_
+        | None -> env_add_binding env binding Unknown)
     in
     let () =
       ListLabels.iter bindings ~f:(fun (binding : binding) ->
@@ -713,7 +728,8 @@ let rec infer_type (env : type_ env) (expr : expr) (incoming : type_) : type_ =
     ListLabels.iter bindings ~f:(fun (binding : binding) ->
       match binding.type_ with
       | Some type_ ->
-        let (_ : type_) = type_env_find_and_infer env binding.name type_ in
+        let entry = env_find env binding.name in
+        let (_ : type_) = infer_entry_type entry binding.name type_ in
         ()
       | None -> ());
     infer_type env body incoming
@@ -744,12 +760,13 @@ let rec infer_type (env : type_ env) (expr : expr) (incoming : type_) : type_ =
             | None -> Unknown
           in
           let type_ = unify_types annotation_type incoming_type in
-          env_add env arg_name type_ None)
+          env_add_no_expr env arg_name type_)
     in
     let return = infer_type env body incoming_return in
     let args =
       ListLabels.map arg_names ~f:(fun (arg_name, _) ->
-        type_env_find_and_infer env arg_name Unknown)
+        let entry = env_find env arg_name in
+        infer_entry_type entry arg_name Unknown)
     in
     Function { args; return }
   | Call { fn; args } ->
@@ -767,8 +784,7 @@ let rec infer_type (env : type_ env) (expr : expr) (incoming : type_) : type_ =
       ());
     unify_types fn_return incoming
 
-and type_env_find_and_infer (env : type_ env) (name : string) (incoming : type_) : type_ =
-  let entry = env_find env name in
+and infer_entry_type entry name (incoming : type_) : type_ =
   let incoming = unify_types incoming entry.data in
   let type_ =
     match entry.expr with
@@ -777,7 +793,6 @@ and type_env_find_and_infer (env : type_ env) (name : string) (incoming : type_)
       infer_type env expr incoming
     | None -> incoming
   in
-  let entry = env_find env name in
   entry.data <- type_;
   if type_is_fully_known type_
   then type_
@@ -801,6 +816,7 @@ type stack_instr =
       }
   | Push_fn of { id : int }
   | Dup of { src : int }
+  | Save of int
   | Call
 
 type stack_fn =
@@ -820,7 +836,11 @@ let stack_fns_add (fns : stack_fns) (arity : int) (instrs : stack_instr list) : 
   id
 ;;
 
-let rec generate_stack_instrs (fns : stack_fns) (env : stack_instr list env) (expr : expr)
+let rec generate_stack_instrs
+  (fns : stack_fns)
+  (save_count : int ref)
+  (env : stack_instr list env)
+  (expr : expr)
   : stack_instr list
   =
   match expr with
@@ -828,26 +848,39 @@ let rec generate_stack_instrs (fns : stack_fns) (env : stack_instr list env) (ex
     let entry = env_find env name in
     (match entry.expr with
      | Some (env, expr) ->
-       let instrs = generate_stack_instrs fns env expr in
-       entry.data <- instrs;
+       let instrs = generate_stack_instrs fns save_count env expr in
        entry.expr <- None;
-       instrs
+       (match instrs with
+        | [] | [ (Call | Save _) ] -> assert false
+        | [ (Push_data _ | Push_fn _ | Dup _) ] ->
+          entry.data <- instrs;
+          instrs
+        | _ :: _ :: _ ->
+          if !(entry.usages) > 1
+          then (
+            let save_id = !save_count in
+            incr save_count;
+            entry.data <- [ Dup { src = save_id } ];
+            instrs @ [ Save save_id ])
+          else instrs)
      | None -> entry.data)
   | Integer { data; size } -> [ Push_data { size; data } ]
-  | Comment { text = _; expr } -> generate_stack_instrs fns env expr
+  | Comment { text = _; expr } -> generate_stack_instrs fns save_count env expr
   | Let { binding; body } ->
-    let env = env_add env binding.name [] (Some binding.expr) in
-    generate_stack_instrs fns env body
+    let env = env_add_binding env binding [] in
+    generate_stack_instrs fns save_count env body
   | Rec _ -> assert false
   | Match _ -> assert false
   | Fn { arg_names; body } ->
     let id = generate_function fns env arg_names body in
     [ Push_fn { id } ]
   | Call { fn; args } ->
-    ListLabels.concat_map (List.rev args) ~f:(fun arg ->
-      generate_stack_instrs fns env arg)
-    @ generate_stack_instrs fns env fn
-    @ [ Call ]
+    let args =
+      ListLabels.concat_map (List.rev args) ~f:(fun arg ->
+        generate_stack_instrs fns save_count env arg)
+    in
+    let return = generate_stack_instrs fns save_count env fn in
+    args @ return @ [ Call ]
 
 and generate_function (fns : stack_fns) env arg_names body : int =
   let env, arity =
@@ -855,9 +888,9 @@ and generate_function (fns : stack_fns) env arg_names body : int =
       arg_names
       ~init:(env_bump_level env, 0)
       ~f:(fun (env, i) (arg_name, _) ->
-        env_add env arg_name [ Dup { src = i } ] None, i + 1)
+        env_add_no_expr env arg_name [ Dup { src = i } ], i + 1)
   in
-  let instrs = generate_stack_instrs fns env body in
+  let instrs = generate_stack_instrs fns (ref 0) env body in
   stack_fns_add fns arity instrs
 ;;
 
@@ -878,7 +911,10 @@ let output_stack_instrs (output : output) (instrs : stack_instr list) : unit =
       | Dup { src } ->
         output_string output "dup ";
         output_string output (Int.to_string src)
-      | Call -> output_string output "call")
+      | Call -> output_string output "call"
+      | Save dest ->
+        output_string output "save ";
+        output_string output (Int.to_string dest))
 ;;
 
 let output_fns (output : output) (fns : stack_fns) : unit =
@@ -904,7 +940,7 @@ let stack_instrs input =
   let (_ : type_) = infer_type env expr Unknown in
   let fns = { fns = Int_map.empty; next_id = 0 } in
   let env : _ env = { level = 0; entries = String_map.empty } in
-  let instrs = generate_stack_instrs fns env expr in
+  let instrs = generate_stack_instrs fns (ref 0) env expr in
   let output = { indent = 0; at_start_of_line = false; buffer = Buffer.create 1024 } in
   output_fns output fns;
   output_stack_instrs output instrs;

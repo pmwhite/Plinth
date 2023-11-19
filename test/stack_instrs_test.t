@@ -44,10 +44,10 @@ followed by the function being called, and then invoke the function.
   0 (arity 1)
     dup 0
   
-  1 (arity 1)
+  1 (arity 2)
     dup 0
   
-  2 (arity 2)
+  2 (arity 1)
     dup 0
   
   push 1:1
@@ -55,13 +55,38 @@ followed by the function being called, and then invoke the function.
   call
   push 1:1
   fn 0
-  call
-  fn 2
-  call
-  push 1:1
-  fn 2
   call
   fn 1
   call
+  push 1:1
+  fn 1
+  call
+  fn 2
+  call
   fn 0
+  call
+
+If we use a variable more than once, then it is saved on the stack so that it
+doesn't need to be recomputed.
+
+  $ test_file <<EOF
+  > let f = fn(x:1) x
+  > let g = fn(x:1, y:1) x
+  > let x = f(f(1))
+  > g(x, x)
+  > EOF
+  0 (arity 1)
+    dup 0
+  
+  1 (arity 2)
+    dup 0
+  
+  push 1:1
+  fn 0
+  call
+  fn 0
+  call
+  save 0
+  dup 0
+  fn 1
   call
