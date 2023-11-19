@@ -565,14 +565,14 @@ let reformat input =
   Buffer.contents output.buffer
 ;;
 
-type env_entry =
+type type_env_entry =
   { mutable type_ : type_
-  ; mutable expr : (env * expr) option
+  ; mutable expr : (type_env * expr) option
   }
 
-and env = env_entry String_map.t
+and type_env = type_env_entry String_map.t
 
-let env_find (fn_env : env) (env : env) (name : string) : env_entry =
+let env_find (fn_env : type_env) (env : type_env) (name : string) : type_env_entry =
   match String_map.find_opt name env with
   | Some entry -> entry
   | None ->
@@ -647,9 +647,11 @@ let args_and_return_of_function_type (type_ : type_) : type_ * type_ list =
   | Function fn_type -> fn_type.return, fn_type.args
 ;;
 
-let rec infer_type (fn_env : env) (env : env) (expr : expr) (incoming : type_) : type_ =
+let rec infer_type (fn_env : type_env) (env : type_env) (expr : expr) (incoming : type_)
+  : type_
+  =
   match expr with
-  | Identifier name -> env_find_and_infer fn_env env name incoming
+  | Identifier name -> type_env_find_and_infer fn_env env name incoming
   | Integer i ->
     let type_ = unify_types incoming Unknown_bits in
     if type_is_fully_known type_
@@ -661,7 +663,7 @@ let rec infer_type (fn_env : env) (env : env) (expr : expr) (incoming : type_) :
     else user_error "Could not infer type of '%s' due to lack of information" i.data
   | Comment { text = _; expr } -> infer_type fn_env env expr incoming
   | Let { binding; body } ->
-    let entry : env_entry =
+    let entry : type_env_entry =
       match binding.type_ with
       | Some type_ ->
         let type_ = infer_type fn_env env binding.expr type_ in
@@ -678,7 +680,7 @@ let rec infer_type (fn_env : env) (env : env) (expr : expr) (incoming : type_) :
   | Rec { bindings; body } ->
     let env =
       ListLabels.fold_left bindings ~init:env ~f:(fun env (binding : binding) ->
-        let entry : env_entry =
+        let entry : type_env_entry =
           match binding.type_ with
           | Some type_ -> { type_; expr = None }
           | None -> { type_ = Unknown; expr = None }
@@ -697,7 +699,7 @@ let rec infer_type (fn_env : env) (env : env) (expr : expr) (incoming : type_) :
     ListLabels.iter bindings ~f:(fun (binding : binding) ->
       match binding.type_ with
       | Some type_ ->
-        let (_ : type_) = env_find_and_infer fn_env env binding.name type_ in
+        let (_ : type_) = type_env_find_and_infer fn_env env binding.name type_ in
         ()
       | None -> ());
     infer_type fn_env env body incoming
@@ -735,7 +737,7 @@ let rec infer_type (fn_env : env) (env : env) (expr : expr) (incoming : type_) :
     let return = infer_type fn_env env body incoming_return in
     let args =
       ListLabels.map arg_names ~f:(fun (arg_name, _) ->
-        env_find_and_infer fn_env env arg_name Unknown)
+        type_env_find_and_infer fn_env env arg_name Unknown)
     in
     Function { args; return }
   | Call { fn; args } ->
@@ -753,7 +755,11 @@ let rec infer_type (fn_env : env) (env : env) (expr : expr) (incoming : type_) :
       ());
     unify_types fn_return incoming
 
-and env_find_and_infer (fn_env : env) (env : env) (name : string) (incoming : type_)
+and type_env_find_and_infer
+  (fn_env : type_env)
+  (env : type_env)
+  (name : string)
+  (incoming : type_)
   : type_
   =
   let entry = env_find fn_env env name in
