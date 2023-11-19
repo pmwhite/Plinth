@@ -821,39 +821,46 @@ let stack_fns_add (fns : stack_fns) (arity : int) (instrs : stack_instr list) : 
 ;;
 
 type stack_env_entry_state =
-  | Not_yet_compiled of stack_env * expr
+  | Not_yet_compiled
   | On_stack of int
   | Fn_id of int
 
-and stack_env = stack_env_entry_state ref String_map.t
-
-let rec generate_stack_instrs (fns : stack_fns) (env : stack_env) (expr : expr)
+let rec generate_stack_instrs
+  (fns : stack_fns)
+  (env : stack_env_entry_state env)
+  (expr : expr)
   : stack_instr list
   =
   match expr with
   | Identifier name ->
-    let entry = String_map.find name env in
-    (match !entry with
-     | Not_yet_compiled (env, expr) ->
-       (match expr with
-        | Fn { arg_names; body } ->
-          let id = generate_function fns arg_names body in
-          entry := Fn_id id;
-          [ Push_fn { id } ]
-        | Identifier _ | Integer _ | Comment _ | Let _ | Rec _ | Match _ | Call _ ->
-          generate_stack_instrs fns env expr)
+    let entry = env_find env name in
+    (match entry.data with
      | On_stack src -> [ Dup { src } ]
-     | Fn_id id -> [ Push_fn { id } ])
+     | Fn_id id -> [ Push_fn { id } ]
+     | Not_yet_compiled ->
+       (match entry.expr with
+        | Some (env, expr) ->
+          let result =
+            match expr with
+            | Fn { arg_names; body } ->
+              let id = generate_function fns env arg_names body in
+              entry.data <- Fn_id id;
+              [ Push_fn { id } ]
+            | Identifier _ | Integer _ | Comment _ | Let _ | Rec _ | Match _ | Call _ ->
+              generate_stack_instrs fns env expr
+          in
+          entry.expr <- None;
+          result
+        | None -> assert false))
   | Integer { data; size } -> [ Push_data { size; data } ]
   | Comment { text = _; expr } -> generate_stack_instrs fns env expr
   | Let { binding; body } ->
-    let entry = ref (Not_yet_compiled (env, binding.expr)) in
-    let env = String_map.add binding.name entry env in
+    let env = env_add env binding.name Not_yet_compiled (Some binding.expr) in
     generate_stack_instrs fns env body
   | Rec _ -> assert false
   | Match _ -> assert false
   | Fn { arg_names; body } ->
-    let id = generate_function fns arg_names body in
+    let id = generate_function fns env arg_names body in
     [ Push_fn { id } ]
   | Call { fn; args } ->
     ListLabels.concat_map (List.rev args) ~f:(fun arg ->
@@ -861,13 +868,12 @@ let rec generate_stack_instrs (fns : stack_fns) (env : stack_env) (expr : expr)
     @ generate_stack_instrs fns env fn
     @ [ Call ]
 
-and generate_function (fns : stack_fns) arg_names body : int =
+and generate_function (fns : stack_fns) env arg_names body : int =
   let env, arity =
     ListLabels.fold_left
       arg_names
-      ~init:(String_map.empty, 0)
-      ~f:(fun (env, i) (arg_name, _) ->
-        String_map.add arg_name (ref (On_stack i)) env, i + 1)
+      ~init:(env_bump_level env, 0)
+      ~f:(fun (env, i) (arg_name, _) -> env_add env arg_name (On_stack i) None, i + 1)
   in
   let instrs = generate_stack_instrs fns env body in
   stack_fns_add fns arity instrs
@@ -915,7 +921,8 @@ let stack_instrs input =
   let env : type_ env = { level = 0; entries = String_map.empty } in
   let (_ : type_) = infer_type env expr Unknown in
   let fns = { fns = Int_map.empty; next_id = 0 } in
-  let instrs = generate_stack_instrs fns String_map.empty expr in
+  let env : _ env = { level = 0; entries = String_map.empty } in
+  let instrs = generate_stack_instrs fns env expr in
   let output = { indent = 0; at_start_of_line = false; buffer = Buffer.create 1024 } in
   output_fns output fns;
   output_stack_instrs output instrs;
