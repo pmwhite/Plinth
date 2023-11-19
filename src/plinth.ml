@@ -1,6 +1,8 @@
 module String_map = Map.Make (String)
 module Int_map = Map.Make (Int)
 
+let ( = ) = Int.equal
+
 type type_ =
   | Unknown
   | Unknown_bits
@@ -565,21 +567,48 @@ let reformat input =
   Buffer.contents output.buffer
 ;;
 
-type type_env_entry =
-  { mutable type_ : type_
-  ; mutable expr : (type_env * expr) option
+type 'a env_entry =
+  { level : int
+  ; mutable data : 'a
+  ; mutable expr : ('a env * expr) option
   }
 
-and type_env = type_env_entry String_map.t
+and 'a env =
+  { level : int
+  ; entries : 'a env_entry String_map.t
+  }
 
-let env_find (fn_env : type_env) (env : type_env) (name : string) : type_env_entry =
-  match String_map.find_opt name env with
-  | Some entry -> entry
-  | None ->
-    (match String_map.find_opt name fn_env with
-     | Some entry -> entry
-     | None -> user_error "Unbound name %s" name)
+let expr_is_constant (expr : expr) =
+  match expr with
+  | Fn _ | Integer _ -> true
+  | Comment _ | Identifier _ | Let _ | Rec _ | Match _ | Call _ -> false
 ;;
+
+let env_add (env : 'a env) (name : string) (data : 'a) (expr : expr option) : 'a env =
+  let expr, level =
+    match expr with
+    | Some expr ->
+      let level = if expr_is_constant expr then 0 else env.level in
+      Some (env, expr), level
+    | None -> None, env.level
+  in
+  { env with entries = String_map.add name { level; data; expr } env.entries }
+;;
+
+let env_find (env : 'a env) (name : string) : 'a env_entry =
+  match String_map.find_opt name env.entries with
+  | Some entry ->
+    if entry.level = env.level || entry.level = 0
+    then entry
+    else
+      user_error
+        "'%s' is bound outside the current function and cannot be hoisted to the top \
+         scope."
+        name
+  | None -> user_error "Unbound name %s" name
+;;
+
+let env_bump_level (env : 'a env) : 'a env = { env with level = env.level + 1 }
 
 exception Unify_error
 
@@ -647,11 +676,9 @@ let args_and_return_of_function_type (type_ : type_) : type_ * type_ list =
   | Function fn_type -> fn_type.return, fn_type.args
 ;;
 
-let rec infer_type (fn_env : type_env) (env : type_env) (expr : expr) (incoming : type_)
-  : type_
-  =
+let rec infer_type (env : type_ env) (expr : expr) (incoming : type_) : type_ =
   match expr with
-  | Identifier name -> type_env_find_and_infer fn_env env name incoming
+  | Identifier name -> type_env_find_and_infer env name incoming
   | Integer i ->
     let type_ = unify_types incoming Unknown_bits in
     if type_is_fully_known type_
@@ -661,54 +688,41 @@ let rec infer_type (fn_env : type_env) (env : type_env) (expr : expr) (incoming 
        | Unknown | Unknown_bits | Pointer _ | Function _ -> assert false);
       type_)
     else user_error "Could not infer type of '%s' due to lack of information" i.data
-  | Comment { text = _; expr } -> infer_type fn_env env expr incoming
+  | Comment { text = _; expr } -> infer_type env expr incoming
   | Let { binding; body } ->
-    let entry : type_env_entry =
+    let env =
       match binding.type_ with
       | Some type_ ->
-        let type_ = infer_type fn_env env binding.expr type_ in
-        { type_; expr = None }
-      | None -> { type_ = Unknown; expr = Some (env, binding.expr) }
+        let type_ = infer_type env binding.expr type_ in
+        env_add env binding.name type_ (Some binding.expr)
+      | None -> env_add env binding.name Unknown (Some binding.expr)
     in
-    let env = String_map.add binding.name entry env in
-    let fn_env =
-      match binding.expr with
-      | Fn _ -> String_map.add binding.name entry fn_env
-      | Identifier _ | Integer _ | Comment _ | Let _ | Rec _ | Match _ | Call _ -> fn_env
-    in
-    infer_type fn_env env body incoming
+    infer_type env body incoming
   | Rec { bindings; body } ->
     let env =
       ListLabels.fold_left bindings ~init:env ~f:(fun env (binding : binding) ->
-        let entry : type_env_entry =
-          match binding.type_ with
-          | Some type_ -> { type_; expr = None }
-          | None -> { type_ = Unknown; expr = None }
-        in
-        String_map.add binding.name entry env)
+        match binding.type_ with
+        | Some type_ -> env_add env binding.name type_ (Some binding.expr)
+        | None -> env_add env binding.name Unknown (Some binding.expr))
     in
-    let fn_env =
-      ListLabels.fold_left bindings ~init:fn_env ~f:(fun fn_env (binding : binding) ->
-        let entry = env_find fn_env env binding.name in
-        entry.expr <- Some (env, binding.expr);
-        match binding.expr with
-        | Fn _ -> String_map.add binding.name entry fn_env
-        | Identifier _ | Integer _ | Comment _ | Let _ | Rec _ | Match _ | Call _ ->
-          fn_env)
+    let () =
+      ListLabels.iter bindings ~f:(fun (binding : binding) ->
+        let entry = env_find env binding.name in
+        entry.expr <- Option.map (fun (_, expr) -> env, expr) entry.expr)
     in
     ListLabels.iter bindings ~f:(fun (binding : binding) ->
       match binding.type_ with
       | Some type_ ->
-        let (_ : type_) = type_env_find_and_infer fn_env env binding.name type_ in
+        let (_ : type_) = type_env_find_and_infer env binding.name type_ in
         ()
       | None -> ());
-    infer_type fn_env env body incoming
+    infer_type env body incoming
   | Match { expr; cases } ->
     let result =
       ListLabels.fold_left cases ~init:incoming ~f:(fun incoming (_, expr) ->
-        infer_type fn_env env expr incoming)
+        infer_type env expr incoming)
     in
-    let (_ : type_) = infer_type fn_env env expr Unknown_bits in
+    let (_ : type_) = infer_type env expr Unknown_bits in
     result
   | Fn { arg_names; body } ->
     let incoming_return, incoming_args =
@@ -722,22 +736,20 @@ let rec infer_type (fn_env : type_env) (env : type_env) (expr : expr) (incoming 
       ListLabels.fold_left2
         incoming_args
         arg_names
-        ~init:String_map.empty
+        ~init:(env_bump_level env)
         ~f:(fun env incoming_type (arg_name, annotation_type) ->
           let annotation_type =
             match annotation_type with
             | Some annotation_type -> annotation_type
             | None -> Unknown
           in
-          let entry =
-            { type_ = unify_types annotation_type incoming_type; expr = None }
-          in
-          String_map.add arg_name entry env)
+          let type_ = unify_types annotation_type incoming_type in
+          env_add env arg_name type_ None)
     in
-    let return = infer_type fn_env env body incoming_return in
+    let return = infer_type env body incoming_return in
     let args =
       ListLabels.map arg_names ~f:(fun (arg_name, _) ->
-        type_env_find_and_infer fn_env env arg_name Unknown)
+        type_env_find_and_infer env arg_name Unknown)
     in
     Function { args; return }
   | Call { fn; args } ->
@@ -746,33 +758,27 @@ let rec infer_type (fn_env : type_env) (env : type_env) (expr : expr) (incoming 
         let incoming =
           Function { return = incoming; args = ListLabels.map args ~f:(fun _ -> Unknown) }
         in
-        infer_type fn_env env fn incoming
+        infer_type env fn incoming
       in
       args_and_return_of_function_type fn_type
     in
     ListLabels.iter2 fn_args args ~f:(fun fn_arg arg ->
-      let (_ : type_) = infer_type fn_env env arg fn_arg in
+      let (_ : type_) = infer_type env arg fn_arg in
       ());
     unify_types fn_return incoming
 
-and type_env_find_and_infer
-  (fn_env : type_env)
-  (env : type_env)
-  (name : string)
-  (incoming : type_)
-  : type_
-  =
-  let entry = env_find fn_env env name in
-  let incoming = unify_types incoming entry.type_ in
+and type_env_find_and_infer (env : type_ env) (name : string) (incoming : type_) : type_ =
+  let entry = env_find env name in
+  let incoming = unify_types incoming entry.data in
   let type_ =
     match entry.expr with
     | Some (env, expr) ->
       entry.expr <- None;
-      infer_type fn_env env expr incoming
+      infer_type env expr incoming
     | None -> incoming
   in
-  let entry = env_find fn_env env name in
-  entry.type_ <- type_;
+  let entry = env_find env name in
+  entry.data <- type_;
   if type_is_fully_known type_
   then type_
   else user_error "Could not infer type of '%s' due to lack of information" name
@@ -781,9 +787,8 @@ and type_env_find_and_infer
 let type_of input =
   let ps = { input; input_len = String.length input; index = 0 } in
   let expr = parse_program ps in
-  let fn_env = String_map.empty in
-  let env = String_map.empty in
-  let type_ = infer_type fn_env env expr Unknown in
+  let env : type_ env = { level = 0; entries = String_map.empty } in
+  let type_ = infer_type env expr Unknown in
   let output = { indent = 0; at_start_of_line = false; buffer = Buffer.create 1024 } in
   output_type output type_;
   Buffer.contents output.buffer
@@ -912,9 +917,8 @@ let output_fns (output : output) (fns : stack_fns) : unit =
 let stack_instrs input =
   let ps = { input; input_len = String.length input; index = 0 } in
   let expr = parse_program ps in
-  let fn_env = String_map.empty in
-  let env = String_map.empty in
-  let (_ : type_) = infer_type fn_env env expr Unknown in
+  let env : type_ env = { level = 0; entries = String_map.empty } in
+  let (_ : type_) = infer_type env expr Unknown in
   let fns = { fns = Int_map.empty; next_id = 0 } in
   let instrs = generate_stack_instrs fns String_map.empty String_map.empty expr in
   let output = { indent = 0; at_start_of_line = false; buffer = Buffer.create 1024 } in

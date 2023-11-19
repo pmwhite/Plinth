@@ -2,7 +2,7 @@
 
 set -euxo pipefail
 
-warnings="-w A-42-70"
+warnings="-w A-42-70-30"
 
 # Build the library
 ocamlopt $warnings src/plinth.mli -o src/plinth.cmi
