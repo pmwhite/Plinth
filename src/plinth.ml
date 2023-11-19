@@ -572,10 +572,6 @@ type env_entry =
 
 and env = env_entry String_map.t
 
-let env_add (env : env) (name : string) (entry : env_entry) : env =
-  String_map.add name entry env
-;;
-
 let env_find (fn_env : env) (env : env) (name : string) : env_entry =
   match String_map.find_opt name env with
   | Some entry -> entry
@@ -672,10 +668,10 @@ let rec infer_type (fn_env : env) (env : env) (expr : expr) (incoming : type_) :
         { type_; expr = None }
       | None -> { type_ = Unknown; expr = Some (env, binding.expr) }
     in
-    let env = env_add env binding.name entry in
+    let env = String_map.add binding.name entry env in
     let fn_env =
       match binding.expr with
-      | Fn _ -> env_add fn_env binding.name entry
+      | Fn _ -> String_map.add binding.name entry fn_env
       | Identifier _ | Integer _ | Comment _ | Let _ | Rec _ | Match _ | Call _ -> fn_env
     in
     infer_type fn_env env body incoming
@@ -687,14 +683,14 @@ let rec infer_type (fn_env : env) (env : env) (expr : expr) (incoming : type_) :
           | Some type_ -> { type_; expr = None }
           | None -> { type_ = Unknown; expr = None }
         in
-        env_add env binding.name entry)
+        String_map.add binding.name entry env)
     in
     let fn_env =
       ListLabels.fold_left bindings ~init:fn_env ~f:(fun fn_env (binding : binding) ->
         let entry = env_find fn_env env binding.name in
         entry.expr <- Some (env, binding.expr);
         match binding.expr with
-        | Fn _ -> env_add fn_env binding.name entry
+        | Fn _ -> String_map.add binding.name entry fn_env
         | Identifier _ | Integer _ | Comment _ | Let _ | Rec _ | Match _ | Call _ ->
           fn_env)
     in
@@ -734,7 +730,7 @@ let rec infer_type (fn_env : env) (env : env) (expr : expr) (incoming : type_) :
           let entry =
             { type_ = unify_types annotation_type incoming_type; expr = None }
           in
-          env_add env arg_name entry)
+          String_map.add arg_name entry env)
     in
     let return = infer_type fn_env env body incoming_return in
     let args =
@@ -820,7 +816,11 @@ type stack_env_entry_state =
 
 and stack_env = stack_env_entry_state ref String_map.t
 
-let rec generate_stack_instrs (fns : stack_fns) (env : stack_env) (expr : expr)
+let rec generate_stack_instrs
+  (fns : stack_fns)
+  (fn_env : stack_env)
+  (env : stack_env)
+  (expr : expr)
   : stack_instr list
   =
   match expr with
@@ -830,31 +830,31 @@ let rec generate_stack_instrs (fns : stack_fns) (env : stack_env) (expr : expr)
      | Not_yet_compiled (env, expr) ->
        (match expr with
         | Fn { arg_names; body } ->
-          let id = generate_function fns env arg_names body in
+          let id = generate_function fns fn_env arg_names body in
           entry := Fn_id id;
           [ Push_fn { id } ]
         | Identifier _ | Integer _ | Comment _ | Let _ | Rec _ | Match _ | Call _ ->
-          generate_stack_instrs fns env expr)
+          generate_stack_instrs fns fn_env env expr)
      | On_stack src -> [ Dup { src } ]
      | Fn_id id -> [ Push_fn { id } ])
   | Integer { data; size } -> [ Push_data { size; data } ]
-  | Comment { text = _; expr } -> generate_stack_instrs fns env expr
+  | Comment { text = _; expr } -> generate_stack_instrs fns fn_env env expr
   | Let { binding; body } ->
     let entry = ref (Not_yet_compiled (env, binding.expr)) in
     let env = String_map.add binding.name entry env in
-    generate_stack_instrs fns env body
+    generate_stack_instrs fns fn_env env body
   | Rec _ -> assert false
   | Match _ -> assert false
   | Fn { arg_names; body } ->
-    let id = generate_function fns env arg_names body in
+    let id = generate_function fns fn_env arg_names body in
     [ Push_fn { id } ]
   | Call { fn; args } ->
     ListLabels.concat_map (List.rev args) ~f:(fun arg ->
-      generate_stack_instrs fns env arg)
-    @ generate_stack_instrs fns env fn
+      generate_stack_instrs fns fn_env env arg)
+    @ generate_stack_instrs fns fn_env env fn
     @ [ Call ]
 
-and generate_function (fns : stack_fns) (_env : stack_env) arg_names body : int =
+and generate_function (fns : stack_fns) (fn_env : stack_env) arg_names body : int =
   (* TODO: Use fn_env and env separately instead of putting al the names in just env. *)
   let env, arity =
     ListLabels.fold_left
@@ -863,7 +863,7 @@ and generate_function (fns : stack_fns) (_env : stack_env) arg_names body : int 
       ~f:(fun (env, i) (arg_name, _) ->
         String_map.add arg_name (ref (On_stack i)) env, i + 1)
   in
-  let instrs = generate_stack_instrs fns env body in
+  let instrs = generate_stack_instrs fns fn_env env body in
   stack_fns_add fns arity instrs
 ;;
 
@@ -910,7 +910,7 @@ let stack_instrs input =
   let env = String_map.empty in
   let (_ : type_) = infer_type fn_env env expr Unknown in
   let fns = { fns = Int_map.empty; next_id = 0 } in
-  let instrs = generate_stack_instrs fns String_map.empty expr in
+  let instrs = generate_stack_instrs fns String_map.empty String_map.empty expr in
   let output = { indent = 0; at_start_of_line = false; buffer = Buffer.create 1024 } in
   output_fns output fns;
   output_stack_instrs output instrs;
