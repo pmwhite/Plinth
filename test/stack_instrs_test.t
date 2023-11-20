@@ -90,3 +90,28 @@ doesn't need to be recomputed.
   dup 0
   fn 1
   call
+
+Care must be taken when compiling recursive functions that we do not go into an
+infinite loop during compilation. We don't have to worry about forward
+declaration of each function, since the instruction format is allowed to refer
+to any function id, not just ones that are above it.
+
+  $ test_file <<EOF
+  > rec f : fn(1) 1 = fn(x:1) g(x)
+  > & g = fn(x:1) f(x)
+  > let x : 1 = f(1)
+  > x
+  > EOF
+  0 (arity 1)
+    dup 0
+    fn 1
+    call
+  
+  1 (arity 1)
+    dup 0
+    fn 0
+    call
+  
+  push 1:1
+  fn 0
+  call
